@@ -2,22 +2,18 @@ from torch import nn
 import torch.nn.functional as F
 
 class MyAwesomeModel(nn.Module):
-    def __init__(self):
+    def __init__(self, input_size, output_size, hidden_layers, drop_p=0.5):
         super().__init__()
-        self.fc1 = nn.Linear(784, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc3 = nn.Linear(128, 64)
-        self.fc4 = nn.Linear(64, 10)
-
-        self.dropout = nn.Dropout(p=0.2)
+        self.hidden_layers = nn.ModuleList([nn.Linear(input_size, hidden_layers[0])])
+        layer_sizes = zip(hidden_layers[:-1], hidden_layers[1:])
+        self.hidden_layers.extend([nn.Linear(h1, h2) for h1, h2 in layer_sizes])
+        self.output = nn.Linear(hidden_layers[-1], output_size)
+        self.dropout = nn.Dropout(p=drop_p)
 
     def forward(self, x):
-        x = x.view(x.shape[0], -1)
+        for each in self.hidden_layers:
+            x = F.relu(each(x))
+            x = self.dropout(x)
+        x = self.output(x)
 
-        x = self.dropout(F.relu(self.fc1(x)))
-        x = self.dropout(F.relu(self.fc2(x)))
-        x = self.dropout(F.relu(self.fc3(x)))
-        
-        x = F.log_softmax(self.fc4(x), dim=1)
-
-        return x
+        return F.log_softmax(x, dim=1)

@@ -5,10 +5,13 @@ from os import path
 import torch
 from torch import nn
 from torch import optim
+from torch.utils.data import DataLoader
 
-from data import mnist
+import data
 from model import MyAwesomeModel
+from tqdm import trange
 
+import json
 
 class TrainOREvaluate(object):
     """ Helper class that will help launch class methods as commands
@@ -40,26 +43,52 @@ class TrainOREvaluate(object):
         print(args)
         
         # TODO: Implement training loop here
-        model = MyAwesomeModel()
-        train_x, train_Y = mnist(train=True)
+        model = MyAwesomeModel(784, 10, [256, 128, 64], drop_p=.2)
+        traindataset = data.CorruptedMNISTDataset(train=True)
+        trainloader = DataLoader(traindataset, batch_size=32, shuffle=True)
+
+        testdataset = data.CorruptedMNISTDataset(train=False)
+        testloader = DataLoader(testdataset, batch_size=32, shuffle=True)
 
         criterion = nn.NLLLoss()
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
         epochs = args.ep
         train_losses, test_losses, test_accuracy = [], [], []
-        for e in range(epochs):
+
+        t = trange(epochs, desc="Num of epochs", leave=True)
+        for e in t:
             running_loss = 0
-            for images, labels in zip(train_x, train_Y):
+            for images, labels in trainloader:
                 optimizer.zero_grad()
                 images = images.resize_(images.size()[0], 784)
-                print(images.shape)
-                sys.exit()
-                output = model.forward()
-
+                output = model.forward(images)
                 loss = criterion(output, labels)
                 loss.backward()
                 optimizer.step()
+
+                running_loss += loss.item()
+            else:
+                with torch.no_grad():
+                    model.eval()
+                    accuracy = 0
+                    test_loss = 0
+
+                    for images, labels in testloader:
+                        images = images.resize_(images.size()[0], 784)
+                        output = model.forward(images)
+                        test_loss += criterion(output, labels).item()
+
+                        ps = torch.exp(output)
+                        equal = (labels.data == ps.max(1)[1])
+                        accuracy += equal.type_as(torch.FloatTensor()).mean()
+                
+                train_losses.append(float(running_loss/len(trainloader)))
+                test_losses.append(float(test_loss/len(testloader)))
+                test_accuracy.append(float(accuracy/len(testloader)))
+
+                model.train()
+                t.set_description(f"Acc: {accuracy/len(testloader):.2f}")
 
         checkpoint = {
             "input_size": 784,
@@ -70,20 +99,56 @@ class TrainOREvaluate(object):
 
         filename = args.fn
         torch.save(checkpoint, path.join("model", filename + ".pth"))
+        with open("logs/temp.json", "w") as f:
+            f.write(json.dumps(
+                {
+                    "train_losses": train_losses,
+                    "test_loss": test_losses,
+                    "test_accuracy": test_accuracy
+                }
+            , indent=2)) 
 
 
     def evaluate(self):
         print("Evaluating until hitting the ceiling")
         parser = argparse.ArgumentParser(description='Training arguments')
-        parser.add_argument('load_model_from', default="")
+        parser.add_argument('load_model_from', default="model/temp.pth", type=str)
         # add any additional argument that you want
         args = parser.parse_args(sys.argv[2:])
         print(args)
         
         # TODO: Implement evaluation logic here
-        model = torch.load(args.load_model_from)
-        test_x, test_Y = mnist(train=False)
+        model = self.load_checkpoint(args.load_model_from)
+        criterion = nn.NLLLoss()
 
+        testdataset = data.CorruptedMNISTDataset(train=False)
+        testloader = DataLoader(testdataset, batch_size=32, shuffle=True)
+
+        accuracy = 0
+        test_loss = 0
+        with torch.no_grad():
+            model.eval()
+            for images, labels in testloader:
+                images = images.resize_(images.size()[0], 784)
+                output = model.forward(images)
+                test_loss += criterion(output, labels).item()
+
+                ps = torch.exp(output)
+                equal = (labels.data == ps.max(1)[1])
+                accuracy += equal.type_as(torch.FloatTensor()).mean()
+        print(f"Test Accuracy: {accuracy/len(testloader)}, TestLoss: {test_loss/len(testloader)}")        
+
+    @staticmethod
+    def load_checkpoint(filepath):
+        checkpoint = torch.load(filepath)
+        model = MyAwesomeModel(
+            checkpoint["input_size"],
+            checkpoint["output_size"],
+            checkpoint["hidden_layers"]
+        )
+        model.load_state_dict(checkpoint["state_dict"])
+
+        return model 
     
 
 if __name__ == '__main__':
